@@ -18,8 +18,13 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     alias(libs.plugins.lightproto)
+}
+
+// Suppress warnings in LightProto generated code
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("-Xlint:-dep-ann")
 }
 
 dependencies {

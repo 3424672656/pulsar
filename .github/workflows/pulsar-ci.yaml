@@ -27,7 +27,7 @@ on:
   schedule:
     # scheduled job with JDK 21
     - cron: '0 12 * * *'
-    # scheduled job with JDK 17
+    # scheduled job with JDK 25
     # if cron expression is changed, make sure to update the expression in jdk_major_version step in preconditions job
     - cron: '0 6 * * *'
   workflow_dispatch:
@@ -37,9 +37,7 @@ on:
         required: true
         type: choice
         options:
-          - '17'
           - '21'
-          - '24'
           - '25'
         default: '21'
       trace_test_resource_cleanup:
@@ -99,9 +97,9 @@ jobs:
       - name: Select JDK major version
         id: jdk_major_version
         run: |
-          # use JDK 17 for the scheduled build with cron expression '0 6 * * *'
+          # use JDK 25 for the scheduled build with cron expression '0 6 * * *'
           if [[ "${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' && 'true' || 'false' }}" == "true" ]]; then
-            echo "jdk_major_version=17" >> $GITHUB_OUTPUT
+            echo "jdk_major_version=25" >> $GITHUB_OUTPUT
             exit 0
           fi
           # use JDK 21 for build unless overridden with workflow_dispatch input
@@ -136,20 +134,11 @@ jobs:
           github.event_name == 'workflow_dispatch' && github.event.inputs.netty_leak_detection || 'report'
           }}" >> $GITHUB_OUTPUT
 
-      - name: Check if the PR has been approved for testing
-        if: ${{ steps.check_changes.outputs.docs_only != 'true' && github.repository == 'apache/pulsar' && github.event_name == 'pull_request' }}
-        env:
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          pulsar-build/pulsar_ci_tool.sh check_ready_to_test
-
   build-and-license-check:
     needs: preconditions
     name: Build and License check
     env:
       JOB_NAME: Build and License check
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -176,15 +165,12 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
+          cache-read-only: false
 
       - name: Build, check licenses and code style
-        # --no-configuration-cache: Shadow plugin's filesMatching { filter { } } lambdas
-        # capture Gradle script references that can't be serialized by the configuration cache.
         run: >-
           ./gradlew assemble rat spotlessCheck checkstyleMain checkstyleTest
           --no-configuration-cache
@@ -232,7 +218,6 @@ jobs:
     name: CI - Unit - ${{ matrix.name }}
     env:
       JOB_NAME: CI - Unit - ${{ matrix.name }}
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
       TRACE_TEST_RESOURCE_CLEANUP: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.trace_test_resource_cleanup || 'off' }}
       TRACE_TEST_RESOURCE_CLEANUP_DIR: ${{ github.workspace }}/build/trace-test-resource-cleanup
@@ -303,11 +288,9 @@ jobs:
           java-version: ${{ matrix.jdk || env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Restore build outputs from build job
         uses: actions/download-artifact@v8
@@ -334,13 +317,6 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
 
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
-
       - name: Report detected thread leaks
         if: ${{ always() }}
         run: |
@@ -359,6 +335,7 @@ jobs:
         with:
           name: Unit-${{ matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -372,6 +349,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
             ${{ env.NETTY_LEAK_DUMP_DIR }}/*
             ${{ env.TRACE_TEST_RESOURCE_CLEANUP_DIR }}/*
             ${{ env.THREAD_LEAK_DETECTOR_DIR }}/*
@@ -393,7 +371,6 @@ jobs:
     needs: ['preconditions', 'build-and-license-check']
     if: ${{ needs.preconditions.outputs.docs_only != 'true' }}
     env:
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
     steps:
       - name: checkout
@@ -409,11 +386,9 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Build with Gradle
         run: ./gradlew assemble
@@ -425,7 +400,6 @@ jobs:
     needs: ['preconditions', 'build-and-license-check']
     if: ${{ needs.preconditions.outputs.docs_only != 'true' }}
     env:
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
     steps:
       - name: checkout
@@ -448,11 +422,9 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Restore build outputs from build job
         uses: actions/download-artifact@v8
@@ -463,7 +435,7 @@ jobs:
         run: tar xf gradle-build-outputs.tar
 
       - name: Build java-test-image Docker image
-        run: ./gradlew :tests:java-test-image:dockerBuild
+        run: ./gradlew :tests:java-test-image:dockerBuild${{ env.CI_JDK_MAJOR_VERSION != '21' && format(' -PdockerJavaVersion={0}', env.CI_JDK_MAJOR_VERSION) || '' }}
 
       - name: Save docker image to file
         run: |
@@ -493,7 +465,6 @@ jobs:
     env:
       JOB_NAME: CI - Integration - ${{ matrix.name }}
       PULSAR_TEST_IMAGE_NAME: apachepulsar/java-test-image:latest
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
     strategy:
       fail-fast: false
@@ -521,10 +492,10 @@ jobs:
             upload_name: SHADE_RUN_21
             runtime_jdk: 21
 
-          - name: Shade on Java 24
+          - name: Shade on Java 25
             group: SHADE_RUN
-            upload_name: SHADE_RUN_24
-            runtime_jdk: 24
+            upload_name: SHADE_RUN_25
+            runtime_jdk: 25
 
           - name: Standalone
             group: STANDALONE
@@ -555,18 +526,18 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      - name: Set up JDK ${{ env.CI_JDK_MAJOR_VERSION }}
+      - name: Set up JDK ${{ env.CI_JDK_MAJOR_VERSION }}${{ matrix.runtime_jdk && matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && format(' and {0}', matrix.runtime_jdk) || '' }}
         uses: actions/setup-java@v5
         with:
           distribution: ${{ env.JDK_DISTRIBUTION }}
-          java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
+          java-version: |
+            ${{ matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && matrix.runtime_jdk || '' }}
+            ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Restore build outputs from build job
         uses: actions/download-artifact@v8
@@ -590,16 +561,9 @@ jobs:
         run: |
           ${{ matrix.setup }}
 
-      - name: Set up runtime JDK ${{ matrix.runtime_jdk }}
-        uses: actions/setup-java@v5
-        if: ${{ matrix.runtime_jdk }}
-        with:
-          distribution: ${{ env.JDK_DISTRIBUTION }}
-          java-version: ${{ matrix.runtime_jdk }}
-
       - name: Run integration test group '${{ matrix.group }}'
         run: |
-          ./pulsar-build/run_integration_group_gradle.sh ${{ matrix.group }}
+          ./pulsar-build/run_integration_group_gradle.sh ${{ matrix.group }}${{ matrix.runtime_jdk && matrix.runtime_jdk != env.CI_JDK_MAJOR_VERSION && format(' -PtestJavaVersion={0}', matrix.runtime_jdk) || '' }}
 
       - name: print JVM thread dumps when cancelled
         if: cancelled()
@@ -609,19 +573,13 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
 
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
-
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         if: ${{ !success() }}
         with:
           name: Integration-${{ matrix.upload_name || matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -635,6 +593,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
           retention-days: 7
           if-no-files-found: ignore
 
@@ -661,7 +620,6 @@ jobs:
     needs: ['preconditions', 'build-and-license-check']
     if: ${{ needs.preconditions.outputs.docs_only != 'true' }}
     env:
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
     steps:
       - name: checkout
@@ -684,11 +642,9 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Restore build outputs from build job
         uses: actions/download-artifact@v8
@@ -699,32 +655,33 @@ jobs:
         run: tar xf gradle-build-outputs.tar
 
       - name: Build pulsar-test-latest-version Docker image
-        run: ./gradlew :tests:latest-version-image:dockerBuild
+        run: ./gradlew :tests:latest-version-image:dockerBuild${{ env.CI_JDK_MAJOR_VERSION != '21' && format(' -PdockerJavaVersion={0}', env.CI_JDK_MAJOR_VERSION) || '' }}
 
       - name: Check binary licenses
         run: |
           src/check-binary-license.sh ./distribution/server/build/distributions/apache-pulsar-*-bin.tar.gz
           src/check-binary-license.sh ./distribution/shell/build/distributions/apache-pulsar-shell-*-bin.tar.gz
 
-#      - name: Run Trivy container scan
-#        id: trivy_scan
-#        uses: aquasecurity/trivy-action@v0.35.0
-#        if: ${{ github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
-#        continue-on-error: true
-#        with:
-#          image-ref: "apachepulsar/pulsar:latest"
-#          scanners: vuln
-#          severity: CRITICAL,HIGH,MEDIUM,LOW
-#          limit-severities-for-sarif: true
-#          format: 'sarif'
-#          output: 'trivy-results.sarif'
-#
-#      - name: Upload Trivy scan results to GitHub Security tab
-#        uses: github/codeql-action/upload-sarif@v3
-#        if: ${{ steps.trivy_scan.outcome == 'success' && github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
-#        continue-on-error: true
-#        with:
-#          sarif_file: 'trivy-results.sarif'
+      - name: Run Trivy container scan
+        id: trivy_scan
+        uses: lhotari/sandboxed-trivy-action@555963036b2012b44c1071508a236e569db28ebb
+        if: ${{ github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
+        continue-on-error: true
+        with:
+          scan-type: 'image'
+          scan-ref: "apachepulsar/pulsar:latest"
+          scanners: vuln
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          limit-severities-for-sarif: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: ${{ steps.trivy_scan.outcome == 'success' && github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
 
       - name: Save docker image to file
         run: |
@@ -754,7 +711,6 @@ jobs:
     env:
       JOB_NAME: CI - System - ${{ matrix.name }}
       PULSAR_TEST_IMAGE_NAME: apachepulsar/pulsar-test-latest-version:latest
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
     strategy:
       fail-fast: false
@@ -802,11 +758,9 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Restore build outputs from build job
         uses: actions/download-artifact@v8
@@ -837,19 +791,13 @@ jobs:
         if: ${{ always() }}
         uses: ./.github/actions/copy-test-reports
 
-      - name: Publish Test Report
-        uses: apache/pulsar-test-infra/action-junit-report@master
-        if: ${{ always() }}
-        with:
-          report_paths: 'test-reports/TEST-*.xml'
-          annotate_only: 'true'
-
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         if: ${{ !success() }}
         with:
           name: System-${{ matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -863,6 +811,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
           retention-days: 7
           if-no-files-found: ignore
 
@@ -893,7 +842,6 @@ jobs:
       contents: read
       security-events: write
     env:
-      DEVELOCITY_ACCESS_KEY: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
       CI_JDK_MAJOR_VERSION: ${{ needs.preconditions.outputs.jdk_major_version }}
       CODEQL_LANGUAGE: java-kotlin
     steps:
@@ -918,14 +866,12 @@ jobs:
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@39e147cb9de83bb9910b8ef8bd7fff0ee20fcd6f
+        uses: ./.github/actions/setup-gradle
         with:
-          develocity-injection-enabled: true
-          develocity-url: https://develocity.apache.org
-          add-job-summary: always
+          develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ env.CODEQL_LANGUAGE }}
 
@@ -933,7 +879,7 @@ jobs:
         run: ./gradlew assemble
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ env.CODEQL_LANGUAGE }}"
 

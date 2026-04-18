@@ -24,13 +24,10 @@ plugins {
 
 val catalog = the<VersionCatalogsExtension>().named("libs")
 
-group = "org.apache.pulsar"
-version = catalog.findVersion("pulsar").get().requiredVersion
-
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(17)
-    options.compilerArgs.addAll(listOf("-parameters"))
+    options.compilerArgs.addAll(listOf("-parameters", "-Xlint:deprecation", "-Xlint:unchecked"))
 }
 
 configurations.all {
@@ -44,7 +41,11 @@ configurations.all {
     // (EnumResolver.constructUsingToString signature changed in 2.19+).
     resolutionStrategy.eachDependency {
         if (requested.group.startsWith("com.fasterxml.jackson")) {
-            useVersion(catalog.findVersion("jackson").get().requiredVersion)
+            if (requested.name == "jackson-annotations") {
+                useVersion(catalog.findVersion("jackson-annotations").get().requiredVersion)
+            } else {
+                useVersion(catalog.findVersion("jackson").get().requiredVersion)
+            }
         }
     }
 }
@@ -116,7 +117,16 @@ dependencies {
     "testImplementation"(catalog.findLibrary("slf4j-api").get())
 }
 
+// Allow overriding the JDK used for running tests via -PtestJavaVersion=17
+val testJavaVersion = providers.gradleProperty("testJavaVersion").map { it.toInt() }
+val javaToolchains = extensions.getByType<JavaToolchainService>()
+
 tasks.withType<Test>().configureEach {
+    testJavaVersion.orNull?.let { version ->
+        javaLauncher.set(javaToolchains.launcherFor {
+            languageVersion.set(JavaLanguageVersion.of(version))
+        })
+    }
     useTestNG {
         listeners.addAll(listOf(
             "org.apache.pulsar.tests.PulsarTestListener",

@@ -17,37 +17,46 @@
  * under the License.
  */
 
-group = "org.apache.pulsar"
-version = the<VersionCatalogsExtension>().named("libs").findVersion("pulsar").get().requiredVersion
-
-
 val pulsarVersion = project.version.toString()
 val dockerOrganization = providers.gradleProperty("docker.organization").getOrElse("apachepulsar")
 val dockerImage = providers.gradleProperty("docker.image").getOrElse("pulsar")
 val dockerTag = providers.gradleProperty("docker.tag").getOrElse("latest")
 val dockerPlatforms = providers.gradleProperty("docker.platforms").getOrElse("")
+val dockerPush = providers.gradleProperty("docker.push").isPresent
 val useWolfi = providers.gradleProperty("docker.wolfi").isPresent
 
-val serverDistTask = project(":distribution:pulsar-server-distribution").tasks.named("serverDistTar")
-val offloaderDistTask = project(":distribution:pulsar-offloader-distribution").tasks.named("offloaderDistTar")
+// Resolvable configurations for cross-project artifact dependencies.
+// Using configurations instead of direct task references (project().tasks.named())
+// ensures compatibility with Gradle's configure-on-demand feature.
+val serverDist by configurations.creating {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+}
+val offloaderDist by configurations.creating {
+    isCanBeResolved = true
+    isCanBeConsumed = false
+}
+
+dependencies {
+    serverDist(project(path = ":distribution:pulsar-server-distribution", configuration = "serverDistElements"))
+    offloaderDist(project(path = ":distribution:pulsar-offloader-distribution", configuration = "offloaderDistElements"))
+}
 
 // Copy the server tarball into target/ (Docker build context)
 val copyTarball by tasks.registering(Copy::class) {
-    dependsOn(serverDistTask)
-    from(serverDistTask.map { (it as Tar).archiveFile })
+    from(serverDist)
     into(layout.buildDirectory.dir("target"))
 }
 
 // Copy offloader tarball into build context
 val copyOffloaderTarball by tasks.registering(Copy::class) {
-    dependsOn(offloaderDistTask)
-    from(offloaderDistTask.map { (it as Tar).archiveFile })
+    from(offloaderDist)
     into(layout.buildDirectory.dir("target"))
 }
 
 val dockerBuild by tasks.registering(Exec::class) {
     group = "docker"
-    description = "Build the Pulsar Docker image"
+    description = "Build the Pulsar Docker image. Use -Pdocker.push to push the image to registry."
 
     dependsOn(copyTarball, copyOffloaderTarball)
 
@@ -76,6 +85,10 @@ val dockerBuild by tasks.registering(Exec::class) {
 
     if (dockerPlatforms.isNotEmpty()) {
         args.addAll(listOf("--platform", dockerPlatforms))
+    }
+
+    if (dockerPush) {
+        args.add("--push")
     }
 
     args.add(".")
